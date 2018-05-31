@@ -10,26 +10,24 @@ const config = {
   },
   http: {
     port: 8000,
+    webroot: './public',
+    mediaroot: './media',
     allow_origin: '*'
   },
   https: {
     port: 8443,
-    key:'./privatekey.pem',
-    cert:'./certificate.pem',
+    key: './privatekey.pem',
+    cert: './certificate.pem',
   },
   auth: {
     play: false,
     publish: false,
     secret: 'nodemedia2017privatekey'
   },
-  apiAuth: {
-    access: false,
-    secret: 'nodemedia2017apikey'
-  }
 };
 
 
-var nms = new NodeMediaServer(config)
+let nms = new NodeMediaServer(config)
 nms.run();
 
 nms.on('preConnect', (id, args) => {

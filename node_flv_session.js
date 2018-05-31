@@ -3,94 +3,102 @@
 //  illuspas[a]gmail.com
 //  Copyright (c) 2017 Nodemedia. All rights reserved.
 //
-const EventEmitter = require('events');
 const URL = require('url');
-
 const AMF = require('./node_core_amf');
-const BufferPool = require('./node_core_bufferpool');
+const Logger = require('./logger');
+const context = require('./node_core_ctx');
 const NodeCoreUtils = require('./node_core_utils');
 
-class NodeFlvSession extends EventEmitter {
+
+
+const FlvPacket = {
+  create: (payload = null, type = 0, time = 0) => {
+    return {
+      header: {
+        length: payload ? payload.length : 0,
+        timestamp: time,
+        type: type,
+      },
+      payload: payload
+    }
+  }
+};
+
+class NodeFlvSession {
   constructor(config, req, res) {
-    super();
     this.config = config;
     this.req = req;
     this.res = res;
-    this.bp = new BufferPool(this.handleData());
-    this.bp.on('error', (e) => {
+    this.id = NodeCoreUtils.generateNewSessionID();
+    this.ip = this.req.socket.remoteAddress;
 
-    });
-    this.allow_origin = config.http.allow_origin == undefined ? '*' : config.http.allow_origin;
-    this.isPublisher = false;
     this.playStreamPath = '';
     this.playArgs = null;
-    this.nodeEvent = NodeCoreUtils.nodeEvent;
 
-    this.on('connect', this.onConnect);
-    this.on('play', this.onPlay);
-    this.on('publish', this.onPublish);
+    this.isStarting = false;
+    this.isPlaying = false;
+    this.isIdling = false;
 
-    if (req.nmsConnectionType === 'ws') {
-      this.res.on('message', this.onReqData.bind(this));
+    if (this.req.nmsConnectionType === 'ws') {
       this.res.on('close', this.onReqClose.bind(this));
       this.res.on('error', this.onReqError.bind(this));
       this.res.write = this.res.send;
       this.res.end = this.res.close;
       this.TAG = 'websocket-flv'
     } else {
-      this.req.on('data', this.onReqData.bind(this));
       this.req.socket.on('close', this.onReqClose.bind(this));
       this.req.on('error', this.onReqError.bind(this));
       this.TAG = 'http-flv'
     }
 
+    context.sessions.set(this.id, this);
   }
 
   run() {
     let method = this.req.method;
     let urlInfo = URL.parse(this.req.url, true);
     let streamPath = urlInfo.pathname.split('.')[0];
-    let format = urlInfo.pathname.split('.')[1];
-    this.connectCmdObj = { method, streamPath, query: urlInfo.query };
-    this.nodeEvent.emit('preConnect', this.id, this.connectCmdObj);
-
-    this.isStarting = true;
-    this.bp.init();
-
+    this.connectCmdObj = { ip: this.ip, method, streamPath, query: urlInfo.query, };
     this.connectTime = new Date();
-
-    if (format != 'flv') {
-      console.log(`[${this.TAG}] Unsupported format=${format}`);
-      this.res.statusCode = 403;
-      this.res.end();
+    this.isStarting = true;
+    Logger.log(`[${this.TAG} connect] id=${this.id} ip=${this.ip} args=${JSON.stringify(urlInfo.query)}`);
+    context.nodeEvent.emit('preConnect', this.id, this.connectCmdObj);
+    if (!this.isStarting) {
+      this.stop();
       return;
     }
-    this.nodeEvent.emit('postConnect', this.id, this.connectCmdObj);
-    if (method == 'GET') {
-      //Play 
+    context.nodeEvent.emit('postConnect', this.id, this.connectCmdObj);
+
+    if (method === 'GET') {
       this.playStreamPath = streamPath;
       this.playArgs = urlInfo.query;
-      console.log(`[${this.TAG} play] play stream ` + this.playStreamPath);
-      this.emit('play');
 
-    } else if (method == 'POST') {
-      //Publish
 
-      console.log(`[${this.TAG}] Unsupported method=` + method);
-      this.res.statusCode = 405;
-      this.res.end();
-      return;
+      this.onPlay();
     } else {
-      console.log(`[${this.TAG}] Unsupported method=` + method);
-      this.res.statusCode = 405;
+      this.stop();
+    }
+
+  }
+
+
+  stop() {
+    if (this.isStarting) {
+      this.isStarting = false;
+      let publisherId = context.publishers.get(this.playStreamPath);
+      if (publisherId != null) {
+        context.sessions.get(publisherId).players.delete(this.id);
+        context.nodeEvent.emit('donePlay', this.id, this.playStreamPath, this.playArgs);
+      }
+      Logger.log(`[${this.TAG} play] Close stream. id=${this.id} streamPath=${this.playStreamPath}`);
+      Logger.log(`[${this.TAG} disconnect] id=${this.id}`);
+      context.nodeEvent.emit('doneConnect', this.id, this.connectCmdObj);
       this.res.end();
-      return;
+      context.idlePlayers.delete(this.id);
+      context.sessions.delete(this.id);
     }
   }
 
-  onReqData(data) {
-    this.bp.push(data);
-  }
 
   onReqClose() {
     this.stop();
@@ -100,84 +108,41 @@ class NodeFlvSession extends EventEmitter {
     this.stop();
   }
 
-  stop() {
-    if (this.isStarting) {
-      this.isStarting = false;
-      this.bp.stop();
-    }
-  }
-
   reject() {
+    Logger.log(`[${this.TAG} reject] id=${this.id}`);
     this.stop();
   }
 
-  * handleData() {
-
-    console.log(`[${this.TAG} message parser] start`);
-    while (this.isStarting) {
-      if (this.bp.need(9)) {
-        if (yield) break;
-      }
-    }
-
-    console.log(`[${this.TAG} message parser] done`);
-    if (this.isPublisher) {
-
-    } else {
-      let publisherId = this.publishers.get(this.playStreamPath);
-      if (publisherId != null) {
-        this.sessions.get(publisherId).players.delete(this.id);
-        this.nodeEvent.emit('donePlay', this.id, this.playStreamPath, this.playArgs);
-      }
-    }
-    this.nodeEvent.emit('doneConnect', this.id, this.connectCmdObj);
-    this.res.end();
-    this.idlePlayers.delete(this.id);
-    this.sessions.delete(this.id);
-    this.idlePlayers = null;
-    this.publishers = null;
-    this.sessions = null;
-  }
-
-  respondUnpublish() {
-    this.res.end();
-  }
-
-  onConnect() {
-
-  }
-
   onPlay() {
-
-    this.nodeEvent.emit('prePlay', this.id, this.playStreamPath, this.playArgs);
+    context.nodeEvent.emit('prePlay', this.id, this.playStreamPath, this.playArgs);
     if (!this.isStarting) {
       return;
     }
     if (this.config.auth !== undefined && this.config.auth.play) {
       let results = NodeCoreUtils.verifyAuth(this.playArgs.sign, this.playStreamPath, this.config.auth.secret);
       if (!results) {
-        console.log(`[${this.TAG}] Unauthorized. ID=${this.id} streamPath=${this.playStreamPath} sign=${this.playArgs.sign}`);
-        this.res.statusCode = 401;
+        Logger.log(`[${this.TAG} play] Unauthorized. id=${this.id} streamPath=${this.playStreamPath} sign=${this.playArgs.sign}`);
+        this.res.statusCode = 403;
         this.res.end();
         return;
       }
     }
 
-    if (!this.publishers.has(this.playStreamPath)) {
-      console.log(`[${this.TAG} play] stream not found ` + this.playStreamPath);
-      this.idlePlayers.add(this.id);
+    if (!context.publishers.has(this.playStreamPath)) {
+      Logger.log(`[${this.TAG} play] Stream not found. id=${this.id} streamPath=${this.playStreamPath} `);
+      context.idlePlayers.add(this.id);
+      this.isIdling = true;
       return;
     }
 
-    let publisherId = this.publishers.get(this.playStreamPath);
-    let publisher = this.sessions.get(publisherId);
+    this.onStartPlay();
+  }
+
+  onStartPlay() {
+    let publisherId = context.publishers.get(this.playStreamPath);
+    let publisher = context.sessions.get(publisherId);
     let players = publisher.players;
     players.add(this.id);
-
-    if (this.res.setHeader !== undefined) {
-      this.res.setHeader('Content-Type', 'video/x-flv');
-      this.res.setHeader('Access-Control-Allow-Origin', this.allow_origin);
-    }
 
     //send FLV header 
     let FLVHeader = Buffer.from([0x46, 0x4C, 0x56, 0x01, 0x00, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00]);
@@ -189,66 +154,54 @@ class NodeFlvSession extends EventEmitter {
       FLVHeader[4] |= 0b00000001;
     }
     this.res.write(FLVHeader);
-    if (publisher.metaData != null) {
-      //send Metadata 
-      let rtmpHeader = {
-        chunkStreamID: 5,
-        timestamp: 0,
-        messageTypeID: 0x12,
-        messageStreamID: 1
-      };
 
-      let metaDataFlvMessage = NodeFlvSession.createFlvMessage(rtmpHeader, publisher.metaData);
-      this.res.write(metaDataFlvMessage);
+    //send Metadata 
+    if (publisher.metaData != null) {
+      let packet = FlvPacket.create(publisher.metaData, 18);
+      let tag = NodeFlvSession.createFlvTag(packet);
+      this.res.write(tag);
     }
+
     //send aacSequenceHeader
     if (publisher.audioCodec == 10) {
-      let rtmpHeader = {
-        chunkStreamID: 4,
-        timestamp: 0,
-        messageTypeID: 0x08,
-        messageStreamID: 1
-      };
-      let flvMessage = NodeFlvSession.createFlvMessage(rtmpHeader, publisher.aacSequenceHeader);
-      this.res.write(flvMessage);
+      let packet = FlvPacket.create(publisher.aacSequenceHeader, 8);
+      let tag = NodeFlvSession.createFlvTag(packet);
+      this.res.write(tag);
     }
+
     //send avcSequenceHeader
     if (publisher.videoCodec == 7 || publisher.videoCodec == 12) {
-      let rtmpHeader = {
-        chunkStreamID: 6,
-        timestamp: 0,
-        messageTypeID: 0x09,
-        messageStreamID: 1
-      };
-      let flvMessage = NodeFlvSession.createFlvMessage(rtmpHeader, publisher.avcSequenceHeader);
-      this.res.write(flvMessage);
+      let packet = FlvPacket.create(publisher.avcSequenceHeader, 9);
+      let tag = NodeFlvSession.createFlvTag(packet);
+      this.res.write(tag);
     }
+
     //send gop cache
     if (publisher.flvGopCacheQueue != null) {
-      for (let flvMessage of publisher.flvGopCacheQueue) {
-        this.res.write(flvMessage);
+      for (let tag of publisher.flvGopCacheQueue) {
+        this.res.write(tag);
       }
     }
-    console.log(`[${this.TAG} play] join stream ` + this.playStreamPath);
-    this.nodeEvent.emit('postPlay', this.id, this.playStreamPath, this.playArgs);
+
+    this.isIdling = false;
+    this.isPlaying = true;
+    Logger.log(`[${this.TAG} play] Join stream. id=${this.id} streamPath=${this.playStreamPath} `);
+    context.nodeEvent.emit('postPlay', this.id, this.playStreamPath, this.playArgs);
   }
 
-  onPublish() {
-
-  }
-
-  static createFlvMessage(rtmpHeader, rtmpBody) {
-    let FLVTagHeader = Buffer.alloc(11);
-    FLVTagHeader[0] = rtmpHeader.messageTypeID;
-    FLVTagHeader.writeUIntBE(rtmpBody.length, 1, 3);
-    FLVTagHeader[4] = (rtmpHeader.timestamp >> 16) & 0xFF;
-    FLVTagHeader[5] = (rtmpHeader.timestamp >> 8) & 0xFF;
-    FLVTagHeader[6] = rtmpHeader.timestamp & 0xFF;
-    FLVTagHeader[7] = (rtmpHeader.timestamp >> 24) & 0xFF;
-    FLVTagHeader.writeUIntBE(0, 8, 3);
-    let PreviousTagSizeN = Buffer.alloc(4);
-    PreviousTagSizeN.writeUInt32BE(11 + rtmpBody.length);
-    return Buffer.concat([FLVTagHeader, rtmpBody, PreviousTagSizeN]);
+  static createFlvTag(packet) {
+    let PreviousTagSize = 11 + packet.header.length;
+    let tagBuffer = Buffer.alloc(PreviousTagSize + 4);
+    tagBuffer[0] = packet.header.type;
+    tagBuffer.writeUIntBE(packet.header.length, 1, 3);
+    tagBuffer[4] = (packet.header.timestamp >> 16) & 0xFF;
+    tagBuffer[5] = (packet.header.timestamp >> 8) & 0xFF;
+    tagBuffer[6] = packet.header.timestamp & 0xFF;
+    tagBuffer[7] = (packet.header.timestamp >> 24) & 0xFF;
+    tagBuffer.writeUIntBE(0, 8, 3);
+    tagBuffer.writeUInt32BE(PreviousTagSize, PreviousTagSize);
+    packet.payload.copy(tagBuffer, 11, 0, packet.header.length);
+    return tagBuffer
   }
 
 }

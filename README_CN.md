@@ -1,12 +1,12 @@
 # Node-Media-Server
+[![npm](https://img.shields.io/node/v/node-media-server.svg)](https://nodejs.org/en/)
 [![npm](https://img.shields.io/npm/v/node-media-server.svg)](https://npmjs.org/package/node-media-server)
 [![npm](https://img.shields.io/npm/dm/node-media-server.svg)](https://npmjs.org/package/node-media-server)
 [![npm](https://img.shields.io/npm/l/node-media-server.svg)](LICENSE)
 
-一个 Node.js 实现的RTMP/HTTP/WebSocket流媒体服务器
+一个 Node.js 实现的RTMP/HTTP/WebSocket/HLS/DASH流媒体服务器
 
 # 特性
- - 基于 ES6 Generator 实现的高性能RTMP协议解析器
  - 跨平台支持 Windows/Linux/Unix
  - 支持的音视频编码 H.264/H.265/AAC/SPEEX/NELLYMOSER
  - 支持缓存最近一个关键帧间隔数据，实现RTMP协议秒开
@@ -16,6 +16,9 @@
  - 支持事件回调
  - 支持https/wss加密传输
  - 支持服务器和流媒体信息统计
+ - 支持RTMP直播流转HLS,DASH直播流
+ - 支持RTMP直播流录制为MP4文件并开启faststart
+ - 支持RTMP/RTSP中继
  
 # 用法 
 ```bash
@@ -45,13 +48,17 @@ nms.run();
 ```
 
 # Todo 
-- [ ] 支持录制为MP4回放
-- [ ] 支持实时转码
+- [x] 支持录制为MP4回放
+- [x] 支持实时转码
 - [ ] 支持多核模式
-- [ ] 支持低延迟HLS/DASH
+- [x] 支持低延迟HLS/DASH
 - [x] 支持服务器和流媒体信息统计
 - [ ] 服务器和流媒体信息统计的前端样式
 - [x] on_connect/on_publish/on_play/on_done 事件回调
+- [ ] 多分辨率转码
+- [ ] 硬件加速转码
+- [X] RTMP 中继
+- [ ] 管理面板
 
 # 直播发布
 ## 使用 FFmpeg 推流
@@ -230,7 +237,7 @@ openssl x509 -req -in certrequest.csr -signkey privatekey.pem -out certificate.p
 
 ## 配置 https支持
 ```js
-const NodeMediaServer = require('./node_media_server');
+const NodeMediaServer = require('node-media-server');
 
 const config = {
   rtmp: {
@@ -384,6 +391,141 @@ http://localhost:8000/api/streams
 }
 ```
 
+
+# 转 HLS/DASH 直播流
+
+```js
+const NodeMediaServer = require('node-media-server');
+
+const config = {
+  rtmp: {
+    port: 1935,
+    chunk_size: 60000,
+    gop_cache: true,
+    ping: 60,
+    ping_timeout: 30
+  },
+  http: {
+    port: 8000,
+    mediaroot: './media',
+    allow_origin: '*'
+  },
+  trans: {
+    ffmpeg: '/usr/local/bin/ffmpeg',
+    tasks: [
+      {
+        app: 'live',
+        ac: 'aac',
+        hls: true,
+        hlsFlags: '[hls_time=2:hls_list_size=3:hls_flags=delete_segments]',
+        dash: true,
+        dashFlags: '[f=dash:window_size=3:extra_window_size=5]'
+      }
+    ]
+  }
+};
+
+var nms = new NodeMediaServer(config)
+nms.run();
+```
+
+# 直播录制为MP4文件
+
+```JS
+const NodeMediaServer = require('node-media-server');
+
+const config = {
+  rtmp: {
+    port: 1935,
+    chunk_size: 60000,
+    gop_cache: true,
+    ping: 60,
+    ping_timeout: 30
+  },
+  http: {
+    port: 8000,
+    mediaroot: './media',
+    allow_origin: '*'
+  },
+  trans: {
+    ffmpeg: '/usr/local/bin/ffmpeg',
+    tasks: [
+      {
+        app: 'vod',
+        ac: 'aac',
+        mp4: true,
+        mp4Flags: '[movflags=faststart]',
+      }
+    ]
+  }
+};
+
+var nms = new NodeMediaServer(config)
+nms.run();
+```
+
+
+# Rtsp/Rtmp 中继
+NodeMediaServer 使用ffmpeg实现RTMP/RTSP的中继服务。
+
+## 静态拉流
+静态拉流模式在服务启动时执行，当发生错误时自动重连。可以是一个直播流，也可以是一个本地文件。理论上并不限制是RTSP或RTMP协议
+
+```
+relay: {
+  ffmpeg: '/usr/local/bin/ffmpeg',
+  tasks: [
+    {
+      app: 'cctv',
+      mode: 'static',
+      edge: 'rtsp://admin:admin888@192.168.0.149:554/ISAPI/streaming/channels/101',
+      name: '0_149_101'
+    }, {
+        app: 'iptv',
+        mode: 'static',
+        edge: 'rtmp://live.hkstv.hk.lxdns.com/live/hks',
+        name: 'hks'
+      }, {
+        app: 'mv',
+        mode: 'static',
+        edge: '/Volumes/ExtData/Movies/Dancing.Queen-SD.mp4',
+        name: 'dq'
+      }
+  ]
+}
+```
+
+## 动态拉流
+当本地服务器收到一个播放请求，如果这个流不存在，则从配置的边缘服务器拉取这个流。当没有客户端播放这个流时，自动断开。
+
+```
+relay: {
+  ffmpeg: '/usr/local/bin/ffmpeg',
+  tasks: [
+    {
+      app: 'live',
+      mode: 'pull',
+      edge: 'rtmp://192.168.0.20',
+    }
+  ]
+}
+```
+
+### 动态推流
+当本地服务器收到一个发布请求，自动将这个流推送到边缘服务器。
+
+```
+relay: {
+  ffmpeg: '/usr/local/bin/ffmpeg',
+  tasks: [
+    {
+      app: 'live',
+      mode: 'push',
+      edge: 'rtmp://192.168.0.10',
+    }
+  ]
+}
+```
 
 # 感谢
 RTSP, RTMP, and HTTP server implementation in Node.js  

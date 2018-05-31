@@ -19,21 +19,21 @@ const AAC_CHANNELS = [
 const AUDIO_CODEC_NAME = [
   '',
   'ADPCM',
-  "MP3",
-  "LinearLE",
-  "Nellymoser16",
-  "Nellymoser8",
-  "Nellymoser",
-  "G711A",
-  "G711U",
-  "",
-  "AAC",
-  "Speex",
-  "",
-  "",
-  "MP3-8K",
-  "DeviceSpecific",
-  "Uncompressed"
+  'MP3',
+  'LinearLE',
+  'Nellymoser16',
+  'Nellymoser8',
+  'Nellymoser',
+  'G711A',
+  'G711U',
+  '',
+  'AAC',
+  'Speex',
+  '',
+  '',
+  'MP3-8K',
+  'DeviceSpecific',
+  'Uncompressed'
 ];
 
 const AUDIO_SOUND_RATE = [
@@ -41,19 +41,19 @@ const AUDIO_SOUND_RATE = [
 ];
 
 const VIDEO_CODEC_NAME = [
-  "",
-  "Jpeg",
-  "Sorenson-H263",
-  "ScreenVideo",
-  "On2-VP6",
-  "On2-VP6-Alpha",
-  "ScreenVideo2",
-  "H264",
-  "",
-  "",
-  "",
-  "",
-  "H265"
+  '',
+  'Jpeg',
+  'Sorenson-H263',
+  'ScreenVideo',
+  'On2-VP6',
+  'On2-VP6-Alpha',
+  'ScreenVideo2',
+  'H264',
+  '',
+  '',
+  '',
+  '',
+  'H265'
 ];
 
 function getObjectType(bitop) {
@@ -97,23 +97,23 @@ function readAACSpecificConfig(aacSequenceHeader) {
 function getAACProfileName(info) {
   switch (info.object_type) {
     case 1:
-      return "Main";
+      return 'Main';
     case 2:
       if (info.ps > 0) {
-        return "HEv2";
+        return 'HEv2';
       }
       if (info.sbr > 0) {
-        return "HE";
+        return 'HE';
       }
-      return "LC";
+      return 'LC';
     case 3:
-      return "SSR";
+      return 'SSR';
     case 4:
-      return "LTP";
+      return 'LTP';
     case 5:
-      return "SBR";
+      return 'SBR';
     default:
-      return "";
+      return '';
   }
 }
 
@@ -179,7 +179,7 @@ function readH264SpecificConfig(avcSequenceHeader) {
       /* seq scaling matrix present */
       if (bitop.read(1)) {
 
-        for (n = 0; n < (cf_idc != 3 ? u8 : u12); n++) {
+        for (n = 0; n < (cf_idc != 3 ? 8 : 12); n++) {
 
           /* seq scaling list present */
           if (bitop.read(1)) {
@@ -381,7 +381,7 @@ function HEVCParseSPS(SPS, hevc) {
     psps.conf_win_top_offset = rbspBitop.read_golomb() * vert_mult;
     psps.conf_win_bottom_offset = rbspBitop.read_golomb() * vert_mult;
   }
-  // console.log(psps);
+  // Logger.debug(psps);
   return psps;
 }
 
@@ -430,14 +430,14 @@ function readHEVCSpecificConfig(hevcSequenceHeader) {
       }
       let nalutype = p[0];
       let n = (p[1]) << 8 | p[2];
-      // console.log(nalutype, n);
+      // Logger.debug(nalutype, n);
       p = p.slice(3);
       for (let j = 0; j < n; j++) {
         if (p.length < 2) {
           break;
         }
         k = (p[0] << 8) | p[1];
-        // console.log('k', k);
+        // Logger.debug('k', k);
         if (p.length < 2 + k) {
           break;
         }
@@ -446,7 +446,7 @@ function readHEVCSpecificConfig(hevcSequenceHeader) {
           //SPS
           let sps = Buffer.alloc(k);
           p.copy(sps, 0, 0, k);
-          // console.log(sps, sps.length);
+          // Logger.debug(sps, sps.length);
           hevc.psps = HEVCParseSPS(sps, hevc);
           info.profile = hevc.general_profile_idc;
           info.level = hevc.general_level_idc / 30.0;
@@ -474,19 +474,19 @@ function readAVCSpecificConfig(avcSequenceHeader) {
 function getAVCProfileName(info) {
   switch (info.profile) {
     case 1:
-      return "Main";
+      return 'Main';
     case 2:
-      return "Main 10";
+      return 'Main 10';
     case 3:
-      return "Main Still Picture";
+      return 'Main Still Picture';
     case 66:
-      return "Baseline";
+      return 'Baseline';
     case 77:
-      return "Main";
+      return 'Main';
     case 100:
-      return "High";
+      return 'High';
     default:
-      return "";
+      return '';
   }
 }
 

@@ -1,22 +1,30 @@
 # Node-Media-Server
+[![npm](https://img.shields.io/node/v/node-media-server.svg)](https://nodejs.org/en/)
 [![npm](https://img.shields.io/npm/v/node-media-server.svg)](https://npmjs.org/package/node-media-server)
 [![npm](https://img.shields.io/npm/dm/node-media-server.svg)](https://npmjs.org/package/node-media-server)
 [![npm](https://img.shields.io/npm/l/node-media-server.svg)](LICENSE)
 
-A Node.js implementation of RTMP/HTTP/WebSocket Media Server  
+![logo](https://www.nodemedia.cn/uploads/site_logo.png)
+
+A Node.js implementation of RTMP/HTTP-FLV/WS-FLV/HLS/DASH Media Server  
 [中文介绍](https://github.com/illuspas/Node-Media-Server/blob/master/README_CN.md)
 
+**If you like this project you can support me.**  
+<a href="https://www.buymeacoffee.com/illuspas" target="_blank"><img src="https://www.buymeacoffee.com/assets/img/custom_images/white_img.png" alt="Buy Me A Coffee" style="height: 41px !important;width: 174px !important;box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;-webkit-box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;" ></a>
+
 # Features
- - High performance RTMP parser based on ES6 Generator implementation
  - Cross platform support Windows/Linux/Unix
  - Support H.264/H.265/AAC/MP3/SPEEX/NELLYMOSER
  - Support GOP cache
  - Support remux to LIVE-HTTP-FLV,Support [flv.js](https://github.com/Bilibili/flv.js) playback
  - Support remux to LIVE-WebSocket-FLV,Support [flv.js](https://github.com/Bilibili/flv.js) playback
+ - Support remux to HLS/DASH/MP4
+ - Support remux to HLS/DASH/MP4 automatic transcoding to aac
  - Support xycdn style authentication
  - Support event callback
  - Support https/wss
  - Support Server Monitor
+ - Support Rtsp/Rtmp relay
  
 # Usage 
 ```bash
@@ -46,13 +54,17 @@ nms.run();
 ```
 
 # Todo 
-- [ ] support record stream 
-- [ ] support transcode
+- [x] support record stream 
+- [x] support transcode
 - [ ] support cluster
-- [ ] support low latency hls
+- [x] support low latency hls
 - [x] server and streams status
 - [ ] server monitor frontend
 - [x] on_connect/on_publish/on_play/on_done event callback
+- [ ] multi resolution transcoding 
+- [ ] hardware acceleration transcoding. 
+- [x] rtmp relay
+- [ ] admin panel
 
 # Publishing live streams
 ## From FFmpeg
@@ -76,17 +88,32 @@ URL : rtmp://localhost/live
 Stream key : STREAM_NAME
 
 # Accessing the live stream
-## via RTMP 
-```bash
-ffplay rtmp://localhost/live/STREAM_NAME
+## RTMP 
+```
+rtmp://localhost/live/STREAM_NAME
 ```
 
-## via http-flv
-```bash
-ffplay http://localhost:8000/live/STREAM_NAME.flv
+## http-flv
+```
+http://localhost:8000/live/STREAM_NAME.flv
 ```
 
-## via flv.js over http
+## websocket-flv
+```
+ws://localhost:8000/live/STREAM_NAME.flv
+```
+
+## HLS
+```
+http://localhost:8000/live/STREAM_NAME/index.m3u8
+```
+
+## DASH
+```
+http://localhost:8000/live/STREAM_NAME/index.mpd
+```
+
+## via flv.js over http-flv
 
 ```html
 <script src="https://cdn.bootcss.com/flv.js/1.4.0/flv.min.js"></script>
@@ -105,7 +132,7 @@ ffplay http://localhost:8000/live/STREAM_NAME.flv
 </script>
 ```
 
-## via flv.js over websocket
+## via flv.js over websocket-flv
 
 ```html
 <script src="https://cdn.bootcss.com/flv.js/1.4.0/flv.min.js"></script>
@@ -122,6 +149,43 @@ ffplay http://localhost:8000/live/STREAM_NAME.flv
         flvPlayer.play();
     }
 </script>
+```
+
+# Logging
+## Modify the logging type
+It is now possible to modify the logging type which determines which console outputs are shown.
+
+There are a total of 4 possible options:
+- 0 - Don't log anything
+- 1 - Log errors
+- 2 - Log errors and generic info
+- 3 - Log everything (debug)
+
+Modifying the logging type is easy - just add a new value `logType` in the config and set it to a value between 0 and 4.
+By default, this is set to show errors and generic info internally (setting 2).
+
+```js
+const NodeMediaServer = require('node-media-server');
+
+const config = {
+  logType: 3,
+
+  rtmp: {
+    port: 1935,
+    chunk_size: 60000,
+    gop_cache: true,
+    ping: 60,
+    ping_timeout: 30
+  },
+  http: {
+    port: 8000,
+    allow_origin: '*'
+  }
+};
+
+var nms = new NodeMediaServer(config)
+nms.run();
+
 ```
 
 # Authentication
@@ -228,7 +292,7 @@ openssl x509 -req -in certrequest.csr -signkey privatekey.pem -out certificate.p
 
 ## Config https
 ```js
-const NodeMediaServer = require('./node_media_server');
+const NodeMediaServer = require('node-media-server');
 
 const config = {
   rtmp: {
@@ -382,6 +446,141 @@ http://localhost:8000/api/streams
 }
 ```
 
+# Remux to HLS/DASH live stream
+```js
+const NodeMediaServer = require('node-media-server');
+
+const config = {
+  rtmp: {
+    port: 1935,
+    chunk_size: 60000,
+    gop_cache: true,
+    ping: 60,
+    ping_timeout: 30
+  },
+  http: {
+    port: 8000,
+    mediaroot: './media',
+    allow_origin: '*'
+  },
+  trans: {
+    ffmpeg: '/usr/local/bin/ffmpeg',
+    tasks: [
+      {
+        app: 'live',
+        ac: 'aac',
+        hls: true,
+        hlsFlags: '[hls_time=2:hls_list_size=3:hls_flags=delete_segments]',
+        dash: true,
+        dashFlags: '[f=dash:window_size=3:extra_window_size=5]'
+      }
+    ]
+  }
+};
+
+var nms = new NodeMediaServer(config)
+nms.run();
+```
+
+# Record to MP4
+```JS
+const NodeMediaServer = require('node-media-server');
+
+const config = {
+  rtmp: {
+    port: 1935,
+    chunk_size: 60000,
+    gop_cache: true,
+    ping: 60,
+    ping_timeout: 30
+  },
+  http: {
+    port: 8000,
+    mediaroot: './media',
+    allow_origin: '*'
+  },
+  trans: {
+    ffmpeg: '/usr/local/bin/ffmpeg',
+    tasks: [
+      {
+        app: 'vod',
+        ac: 'aac',
+        mp4: true,
+        mp4Flags: '[movflags=faststart]',
+      }
+    ]
+  }
+};
+
+var nms = new NodeMediaServer(config)
+nms.run();
+```
+
+# Rtsp/Rtmp Relay
+NodeMediaServer implement RTSP and RTMP relay with ffmpeg.
+
+## Static pull
+The static pull mode is executed at service startup and reconnect after failure.
+It could be a live stream or a file. In theory, it is not limited to RTSP or RTMP protocol.
+
+```
+relay: {
+  ffmpeg: '/usr/local/bin/ffmpeg',
+  tasks: [
+    {
+      app: 'cctv',
+      mode: 'static',
+      edge: 'rtsp://admin:admin888@192.168.0.149:554/ISAPI/streaming/channels/101',
+      name: '0_149_101'
+    }, {
+        app: 'iptv',
+        mode: 'static',
+        edge: 'rtmp://live.hkstv.hk.lxdns.com/live/hks',
+        name: 'hks'
+      }, {
+        app: 'mv',
+        mode: 'static',
+        edge: '/Volumes/ExtData/Movies/Dancing.Queen-SD.mp4',
+        name: 'dq'
+      }
+  ]
+}
+```
+
+## Dynamic pull 
+When the local server receives a play request.
+If the stream does not exist, pull the stream from the configured edge server to local.
+When the stream is not played by the client, it automatically disconnects.
+
+```
+relay: {
+  ffmpeg: '/usr/local/bin/ffmpeg',
+  tasks: [
+    {
+      app: 'live',
+      mode: 'pull',
+      edge: 'rtmp://192.168.0.20',
+    }
+  ]
+}
+```
+
+## Dynamic push
+When the local server receives a publish request.
+Automatically push the stream to the edge server.
+
+```
+relay: {
+  ffmpeg: '/usr/local/bin/ffmpeg',
+  tasks: [
+    {
+      app: 'live',
+      mode: 'push',
+      edge: 'rtmp://192.168.0.10',
+    }
+  ]
+}
+```
 
 # Thanks
 RTSP, RTMP, and HTTP server implementation in Node.js  
